@@ -13,7 +13,8 @@ else:
     exec(open("./dimod/package_info.py").read())
 
 install_requires = ['decorator>=4.1.0',
-                    'enum34']
+                    'enum34',
+                    'dwave_embedding_utilities>=0.2.0']
 
 tests_require = ['numpy']
 extras_require = {'tests': tests_require,
