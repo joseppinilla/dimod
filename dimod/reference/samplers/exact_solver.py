@@ -31,8 +31,7 @@ from dimod.decorators import bqm_index_labels
 from dimod.sampleset import SampleSet
 from dimod.vartypes import Vartype
 
-__all__ = ['ExactSolver']
-
+__all__ = ['ExactSolver', 'ExactDeltaSolver']
 
 class ExactSolver(Sampler):
     """A simple exact solver for testing and debugging code using your local CPU.
@@ -125,7 +124,144 @@ class ExactSolver(Sampler):
 
         return response
 
+class DynamicDeltaSolver(Sampler):
+    def __init__(self):
+        self.properties = {}
+        self.parameters = {}
+
+    @bqm_index_labels
+    def sample(self, bqm):
+        """Sample from a binary quadratic model.
+
+        Args:
+            bqm (:obj:`~dimod.BinaryQuadraticModel`):
+                Binary quadratic model to be sampled from.
+
+        Returns:
+            :obj:`~dimod.Response`: A `dimod` :obj:`.~dimod.Response` object.
+
+        """
+        M = bqm.binary.to_numpy_matrix()
+        off = bqm.binary.offset
+
+        if M.shape == (0, 0):
+            return Response.from_samples([], {'energy': []}, {}, bqm.vartype)
+
+        vartype = bool
+
+        sample = np.zeros((len(bqm)), dtype=vartype)
+
+        info = {}
+
+        reponse = DynamicResponse(variables, info, vartype)
+
+
+        return response
+
+class ExactDeltaSolver(Sampler):
+    """An exact solver using energy deltas for testing and debugging.
+    """
+    properties = None
+    parameters = None
+
+    def __init__(self):
+        self.properties = {}
+        self.parameters = {}
+
+    @bqm_index_labels
+    def sample(self, bqm):
+        """Sample from a binary quadratic model.
+
+        Args:
+            bqm (:obj:`~dimod.BinaryQuadraticModel`):
+                Binary quadratic model to be sampled from.
+
+        Returns:
+            :obj:`~dimod.Response`: A `dimod` :obj:`.~dimod.Response` object.
+
+        """
+        M = bqm.binary.to_numpy_matrix()
+        off = bqm.binary.offset
+
+        if M.shape == (0, 0):
+            return SampleSet.from_samples([], bqm.vartype, energy=[])
+
+        sample = np.zeros((len(bqm)), dtype=bool)
+
+        # now we iterate, flipping one bit at a time until we have
+        # traversed all samples. This is a Gray code.
+        # https://en.wikipedia.org/wiki/Gray_code
+        def iter_samples():
+
+            # energy = 0.0
+            energy = off
+            yield sample.copy(), energy
+
+            for i in range(1, 1 << len(bqm)):
+                v = _ffs(i)
+
+                # flip the bit in the sample
+                sample[v] = not sample[v]
+
+                # calculate energy delta from triu indices of bit flip
+                # only upper triangular part of the matrix
+                delta_e = 0.0
+                for u in range(0, v):
+                    J = M[u][v]
+                    delta_e += J*sample[u]
+                delta_e += M[v][v]
+                for u in range(v+1,len(bqm)):
+                    J = M[v][u]
+                    delta_e += J*sample[u]
+
+                # apply delta
+                if sample[v]:
+                    energy += delta_e
+                else:
+                    energy -= delta_e
+
+                yield sample.copy(), float(energy)
+
+        samples, energies = zip(*iter_samples())
+
+        response = SampleSet.from_samples(np.array(samples, dtype='int8'), Vartype.BINARY, energies)
+
+        # make sure the response matches the given vartype, in-place.
+        response.change_vartype(bqm.vartype, inplace=True)
+
+        return response
 
 def _ffs(x):
     """Gets the index of the least significant set bit of x."""
     return (x & -x).bit_length() - 1
+
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    import networkx as nx
+    import numpy as np
+    import random
+    import dimod
+
+    # Problem parameters
+    J_RANGE = [-2.0, 2.0]
+    H_RANGE = [-1.0, 1.0]
+    size = 18
+
+    # Create Problem
+    Sg = nx.complete_graph(size)
+    for (u,v,data) in Sg.edges(data=True):
+        data['weight'] = random.uniform(*J_RANGE)
+    h = {v:random.uniform(*H_RANGE) for v in Sg}
+    J = {(u,v):data['weight'] for u,v,data  in Sg.edges(data=True)}
+    bqm = dimod.BinaryQuadraticModel(h, J, -0.5, dimod.SPIN)
+
+    delta_sampler = ExactDeltaSolver()
+    dimod_sampler = ExactSolver()
+
+
+    %time delta_response = delta_sampler.sample(bqm)
+    %time dimod_response = dimod_sampler.sample(bqm)
+
+    # list(delta_response.data(['energy']))
+    # list(dimod_response.data(['energy']))
